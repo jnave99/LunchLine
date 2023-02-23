@@ -24,8 +24,6 @@ source-repository head
   location: https://github.com/githubuser/LunchLine
 
 library
-  exposed-modules:
-      Db
   other-modules:
       Paths_LunchLine
   hs-source-dirs:
