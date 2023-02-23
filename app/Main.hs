@@ -46,17 +46,17 @@ getWeeklyBudget = do
   budget :: Maybe (Entity Budget) <- selectFirst [] []
   pure budget
 
-addBudget :: (MonadIO m) => Int -> SqlPersistT m ()
+addBudget :: (MonadIO m) => Int -> SqlPersistT m BudgetId
 addBudget x = do 
-  _ <- insert $ Budget x
-  pure ()
+  budgetId <- insert $ Budget x
+  pure budgetId
 
-setBudget :: (MonadIO m) => Int -> BudgetId -> SqlPersistT m ()
+setBudget :: (MonadIO m) => Int -> BudgetId -> SqlPersistT m BudgetId
 setBudget x budgetId = do 
   Database.Persist.Sqlite.update budgetId [BudgetBudget Database.Persist.Sqlite.=. x]
-  pure ()
+  pure budgetId
 
-setOrAddWeeklyBudget :: (MonadIO m) => Int -> SqlPersistT m ()
+setOrAddWeeklyBudget :: (MonadIO m) => Int -> SqlPersistT m BudgetId
 setOrAddWeeklyBudget x = do 
   currentBudget <- getWeeklyBudget 
   case currentBudget of 
@@ -74,11 +74,11 @@ extractBudget :: Maybe (Entity Budget) -> Int
 extractBudget Nothing = 0
 extractBudget (Just (Entity _ (Budget amount))) = amount
 
-addItem :: (MonadIO m) => String -> Int -> SqlPersistT m () 
+addItem :: (MonadIO m) => String -> Int -> SqlPersistT m LineItemId
 addItem item cost = do 
   today <- liftIO $ utctDay <$> getCurrentTime
-  _ <- insert $ LineItem item cost today
-  pure ()
+  lineItemId <- insert $ LineItem item cost today
+  pure lineItemId
 
 appMain :: AppM ()
 appMain = do
@@ -99,7 +99,7 @@ appMain = do
     runDB $ runText
   liftIO $ putStrLn "End"
 
-handleGetUserItem :: (MonadIO m) => SqlPersistT m ()
+handleGetUserItem :: (MonadIO m) => SqlPersistT m LineItemId
 handleGetUserItem = do 
   liftIO $ putStrLn "What is your item name: "
   name <- liftIO $ getLine 
@@ -109,7 +109,7 @@ handleGetUserItem = do
   liftIO $ putStrLn $ "Adding " ++ name ++ " to your items at $" ++ cost
   addItem name costInt
 
-handleChangeBudget :: (MonadIO m) => SqlPersistT m ()
+handleChangeBudget :: (MonadIO m) => SqlPersistT m BudgetId
 handleChangeBudget = do 
   liftIO $ putStrLn "What is your new budget: "
   budget <- liftIO $ getLine
@@ -128,9 +128,8 @@ runText = do
   selection <- liftIO $ getLine
 
   case selection of 
-    "1" -> handleGetUserItem
-    "2" -> handleChangeBudget
-
+    "1" -> void $ handleGetUserItem
+    "2" -> void $ handleChangeBudget
 
 main :: IO ()
 main = do 
@@ -139,5 +138,3 @@ main = do
       runAppM (Env conn) $ do 
         runDB $ runMigration migrateAll
         appMain
-
-        
