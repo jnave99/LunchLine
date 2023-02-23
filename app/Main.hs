@@ -17,11 +17,13 @@ import Control.Monad.Reader
 import Database.Persist.TH
 import Data.Maybe
 import Database.Esqueleto.Experimental
+import Data.Time
 
 share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
 LineItem
   name String
   amount Int
+  dayPurchased Day
   deriving Show
 Budget 
   budget Int
@@ -76,12 +78,21 @@ extractBudget :: Maybe (Entity Budget) -> Int
 extractBudget Nothing = 0
 extractBudget (Just (Entity _ (Budget amount))) = amount
 
+addItem :: (MonadIO m) => String -> Int -> SqlPersistT m LineItemId 
+addItem item cost = do 
+  today <- liftIO $ utctDay <$> getCurrentTime
+  itemId <- insert $ LineItem item cost today
+  pure itemId
+
 appMain :: AppM ()
 appMain = do
   total <- runDB $ do
-    insert_ $ LineItem "Pizza" 11
-    insert_ $ LineItem "Burger" 12
+    today <- liftIO $ utctDay <$> getCurrentTime
 
+    insert_ $ LineItem "Pizza" 11 today
+    insert_ $ LineItem "Burger" 12 today
+
+    liftIO $ putStrLn "What is your weekly budget: "
     budget <- liftIO $ getLine 
     liftIO $ putStrLn $ "Weekly budget set to: " ++ budget
 
@@ -93,6 +104,30 @@ appMain = do
 
   let remainingBudget = (extractBudget budget) - total
   liftIO . putStrLn $ "Remaining Budget: " <> show remainingBudget
+  _ <- runDB $ runText (extractBudget budget)
+  liftIO $ putStrLn "End"
+
+getUserItem :: (MonadIO m) => SqlPersistT m LineItemId
+getUserItem = do 
+  liftIO $ putStrLn "What is your item name: "
+  name <- liftIO $ getLine 
+  liftIO $ putStrLn "What is its cost (in dollars): "
+  cost <- liftIO $ getLine
+  let costInt = (read cost :: Int)
+  liftIO $ putStrLn $ "Adding " ++ name ++ " to your items at $" ++ cost
+  addItem name costInt
+
+runText :: (MonadIO m) => Int -> SqlPersistT m LineItemId
+runText budget = do 
+  liftIO $ putStrLn $ "Your weekly budget is " ++ (show budget) ++ 
+    "\nWould you like to:\n1. Add an item\n2. Change your budget"
+  selection <- liftIO $ getLine
+
+  case selection of 
+    "1" -> getUserItem
+    --"2" -> putStrLn "Change budget"
+    --_ -> putStrLn "Not an option"
+
 
 main :: IO ()
 main = do 
