@@ -46,26 +46,22 @@ getWeeklyBudget = do
   budget :: Maybe (Entity Budget) <- selectFirst [] []
   pure budget
 
-addBudget :: (MonadIO m) => Int -> SqlPersistT m BudgetId
+addBudget :: (MonadIO m) => Int -> SqlPersistT m ()
 addBudget x = do 
-  budgetId <- insert $ Budget x
-  pure budgetId
+  _ <- insert $ Budget x
+  pure ()
 
-setBudget :: (MonadIO m) => Int -> BudgetId -> SqlPersistT m BudgetId
+setBudget :: (MonadIO m) => Int -> BudgetId -> SqlPersistT m ()
 setBudget x budgetId = do 
   Database.Persist.Sqlite.update budgetId [BudgetBudget Database.Persist.Sqlite.=. x]
-  pure budgetId
+  pure ()
 
-setOrAddWeeklyBudget :: (MonadIO m) => Int -> SqlPersistT m BudgetId
+setOrAddWeeklyBudget :: (MonadIO m) => Int -> SqlPersistT m ()
 setOrAddWeeklyBudget x = do 
   currentBudget <- getWeeklyBudget 
   case currentBudget of 
     Nothing -> addBudget x
     (Just (Entity budgetId _)) -> setBudget x budgetId
-
--- spend :: Int -> LineItem -> Int
--- spend n e = n - (lineItemAmount e)
--- spend n (LineItem { .. }) = n - amount
 
 getLineItemTotal :: (Num a, MonadIO m, PersistField a) => SqlPersistT m a
 getLineItemTotal = selectSum $ do
@@ -78,20 +74,15 @@ extractBudget :: Maybe (Entity Budget) -> Int
 extractBudget Nothing = 0
 extractBudget (Just (Entity _ (Budget amount))) = amount
 
-addItem :: (MonadIO m) => String -> Int -> SqlPersistT m LineItemId 
+addItem :: (MonadIO m) => String -> Int -> SqlPersistT m () 
 addItem item cost = do 
   today <- liftIO $ utctDay <$> getCurrentTime
-  itemId <- insert $ LineItem item cost today
-  pure itemId
+  _ <- insert $ LineItem item cost today
+  pure ()
 
 appMain :: AppM ()
 appMain = do
   total <- runDB $ do
-    today <- liftIO $ utctDay <$> getCurrentTime
-
-    insert_ $ LineItem "Pizza" 11 today
-    insert_ $ LineItem "Burger" 12 today
-
     liftIO $ putStrLn "What is your weekly budget: "
     budget <- liftIO $ getLine 
     liftIO $ putStrLn $ "Weekly budget set to: " ++ budget
@@ -104,11 +95,12 @@ appMain = do
 
   let remainingBudget = (extractBudget budget) - total
   liftIO . putStrLn $ "Remaining Budget: " <> show remainingBudget
-  _ <- runDB $ runText (extractBudget budget)
+  forever $ do
+    runDB $ runText
   liftIO $ putStrLn "End"
 
-getUserItem :: (MonadIO m) => SqlPersistT m LineItemId
-getUserItem = do 
+handleGetUserItem :: (MonadIO m) => SqlPersistT m ()
+handleGetUserItem = do 
   liftIO $ putStrLn "What is your item name: "
   name <- liftIO $ getLine 
   liftIO $ putStrLn "What is its cost (in dollars): "
@@ -117,16 +109,27 @@ getUserItem = do
   liftIO $ putStrLn $ "Adding " ++ name ++ " to your items at $" ++ cost
   addItem name costInt
 
-runText :: (MonadIO m) => Int -> SqlPersistT m LineItemId
-runText budget = do 
-  liftIO $ putStrLn $ "Your weekly budget is " ++ (show budget) ++ 
+handleChangeBudget :: (MonadIO m) => SqlPersistT m ()
+handleChangeBudget = do 
+  liftIO $ putStrLn "What is your new budget: "
+  budget <- liftIO $ getLine
+  let budgetInt = (read budget :: Int)
+  liftIO $ putStrLn $ "Setting budget to $" ++ budget
+  setOrAddWeeklyBudget budgetInt
+
+runText :: (MonadIO m) => SqlPersistT m ()
+runText = do 
+  currentBudget <- getWeeklyBudget
+  maybeRemainingBudget :: Maybe (Entity Budget) <- selectFirst [] []
+  let budget = extractBudget currentBudget
+  spent :: Int <- getLineItemTotal
+  liftIO $ putStrLn $ "Your current budget is $(" ++ (show (budget - spent)) ++ "/" ++ (show budget) ++ ")" ++ 
     "\nWould you like to:\n1. Add an item\n2. Change your budget"
   selection <- liftIO $ getLine
 
   case selection of 
-    "1" -> getUserItem
-    --"2" -> putStrLn "Change budget"
-    --_ -> putStrLn "Not an option"
+    "1" -> handleGetUserItem
+    "2" -> handleChangeBudget
 
 
 main :: IO ()
