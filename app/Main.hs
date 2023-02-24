@@ -18,15 +18,16 @@ import Database.Persist.TH
 import Data.Maybe
 import Database.Esqueleto.Experimental
 import Data.Time
+import System.Exit (exitSuccess)
 
 share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
 LineItem
   name String
-  amount Int
+  amount Double
   dayPurchased Day
   deriving Show
 Budget 
-  budget Int
+  budget Double
 |]
 
 data Env = Env { envConn :: SqlBackend }
@@ -46,17 +47,17 @@ getWeeklyBudget = do
   budget :: Maybe (Entity Budget) <- selectFirst [] []
   pure budget
 
-addBudget :: (MonadIO m) => Int -> SqlPersistT m BudgetId
+addBudget :: (MonadIO m) => Double -> SqlPersistT m BudgetId
 addBudget x = do 
   budgetId <- insert $ Budget x
   pure budgetId
 
-setBudget :: (MonadIO m) => Int -> BudgetId -> SqlPersistT m BudgetId
+setBudget :: (MonadIO m) => Double -> BudgetId -> SqlPersistT m BudgetId
 setBudget x budgetId = do 
   Database.Persist.Sqlite.update budgetId [BudgetBudget Database.Persist.Sqlite.=. x]
   pure budgetId
 
-setOrAddWeeklyBudget :: (MonadIO m) => Int -> SqlPersistT m BudgetId
+setOrAddWeeklyBudget :: (MonadIO m) => Double -> SqlPersistT m BudgetId
 setOrAddWeeklyBudget x = do 
   currentBudget <- getWeeklyBudget 
   case currentBudget of 
@@ -70,15 +71,41 @@ getLineItemTotal = selectSum $ do
  where
   selectSum = fmap (maybe 0 (fromMaybe 0 . unValue)) . selectOne
 
-extractBudget :: Maybe (Entity Budget) -> Int 
+extractBudget :: Maybe (Entity Budget) -> Double 
 extractBudget Nothing = 0
 extractBudget (Just (Entity _ (Budget amount))) = amount
 
-addItem :: (MonadIO m) => String -> Int -> SqlPersistT m LineItemId
+addItem :: (MonadIO m) => String -> Double -> SqlPersistT m LineItemId
 addItem item cost = do 
   today <- liftIO $ utctDay <$> getCurrentTime
   lineItemId <- insert $ LineItem item cost today
   pure lineItemId
+
+getDate :: (MonadIO m) => Bool -> SqlPersistT m Day
+getDate isAsc = do 
+  let today = liftIO $ utctDay <$> getCurrentTime
+
+  item :: Maybe (Entity LineItem) <- do 
+    case isAsc of 
+      True -> selectFirst [] [Asc LineItemDayPurchased]
+      False -> selectFirst [] [Desc LineItemDayPurchased]
+
+  case item of 
+    Nothing -> today
+    (Just (Entity _ (LineItem _ _ day))) -> pure day
+
+notZero :: (Num a, Eq a) => a -> a 
+notZero a 
+  | a == 0 = 1
+  | otherwise = a
+
+getDailyAverageSpend :: (MonadIO m) => SqlPersistT m Double
+getDailyAverageSpend = do 
+  totalSpend <- getLineItemTotal
+  firstDay <- getDate True 
+  lastDay <- getDate False
+
+  pure $ totalSpend / notZero (fromIntegral (diffDays firstDay lastDay))
 
 appMain :: AppM ()
 appMain = do
@@ -87,7 +114,7 @@ appMain = do
     budget <- liftIO $ getLine 
     liftIO $ putStrLn $ "Weekly budget set to: " ++ budget
 
-    _ <- setOrAddWeeklyBudget (read budget :: Int)
+    _ <- setOrAddWeeklyBudget (read budget :: Double)
 
     getLineItemTotal
 
@@ -95,7 +122,7 @@ appMain = do
 
   let remainingBudget = (extractBudget budget) - total
   liftIO . putStrLn $ "Remaining Budget: " <> show remainingBudget
-  forever $ do
+  _ <- forever $ do
     runDB $ runText
   liftIO $ putStrLn "End"
 
@@ -105,31 +132,34 @@ handleGetUserItem = do
   name <- liftIO $ getLine 
   liftIO $ putStrLn "What is its cost (in dollars): "
   cost <- liftIO $ getLine
-  let costInt = (read cost :: Int)
+  let costDouble = (read cost :: Double)
   liftIO $ putStrLn $ "Adding " ++ name ++ " to your items at $" ++ cost
-  addItem name costInt
+  addItem name costDouble
 
 handleChangeBudget :: (MonadIO m) => SqlPersistT m BudgetId
 handleChangeBudget = do 
   liftIO $ putStrLn "What is your new budget: "
   budget <- liftIO $ getLine
-  let budgetInt = (read budget :: Int)
+  let budgetDouble = (read budget :: Double)
   liftIO $ putStrLn $ "Setting budget to $" ++ budget
-  setOrAddWeeklyBudget budgetInt
+  setOrAddWeeklyBudget budgetDouble
 
 runText :: (MonadIO m) => SqlPersistT m ()
 runText = do 
   currentBudget <- getWeeklyBudget
-  maybeRemainingBudget :: Maybe (Entity Budget) <- selectFirst [] []
+  dailySpend <- getDailyAverageSpend
   let budget = extractBudget currentBudget
-  spent :: Int <- getLineItemTotal
+  spent :: Double <- getLineItemTotal
   liftIO $ putStrLn $ "Your current budget is $(" ++ (show (budget - spent)) ++ "/" ++ (show budget) ++ ")" ++ 
-    "\nWould you like to:\n1. Add an item\n2. Change your budget"
+    "\nWould you like to:\n1. Add an item\n2. Change your budget\n3. See statistics\n4. Exit"
   selection <- liftIO $ getLine
 
   case selection of 
     "1" -> void $ handleGetUserItem
     "2" -> void $ handleChangeBudget
+    "3" -> liftIO $ putStrLn (show dailySpend)
+    "4" -> liftIO $ exitSuccess
+    _ -> liftIO $ putStrLn "Error: Not an option"
 
 main :: IO ()
 main = do 
