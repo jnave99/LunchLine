@@ -18,6 +18,7 @@ import Database.Persist.TH
 import Data.Maybe
 import Database.Esqueleto.Experimental
 import Data.Time
+import Data.Time.Calendar.OrdinalDate
 import System.Exit (exitSuccess)
 
 share [mkPersist sqlSettings, mkMigrate "migrateAll"] [persistLowerCase|
@@ -64,9 +65,17 @@ setOrAddWeeklyBudget x = do
     Nothing -> addBudget x
     (Just (Entity budgetId _)) -> setBudget x budgetId
 
-getLineItemTotal :: (Num a, MonadIO m, PersistField a) => SqlPersistT m a
-getLineItemTotal = selectSum $ do
+repeatApply :: Int -> a -> (a -> a) -> a 
+repeatApply 0 a _ =  a 
+repeatApply x a f = repeatApply (x - 1) (f a) f
+
+getLineItemTotal :: (Num a, MonadIO m, PersistField a) => Day -> SqlPersistT m a
+getLineItemTotal today = selectSum $ do
+  let weekday = mondayStartWeek today
+  let startDay = repeatApply (snd weekday) today pred
   items <- from $ table @LineItem
+  where_ $ items ^. LineItemDayPurchased Database.Esqueleto.Experimental.>=. val startDay
+
   pure $ sum_ $ items ^. LineItemAmount
  where
   selectSum = fmap (maybe 0 (fromMaybe 0 . unValue)) . selectOne
@@ -101,7 +110,8 @@ notZero a
 
 getDailyAverageSpend :: (MonadIO m) => SqlPersistT m Double
 getDailyAverageSpend = do 
-  totalSpend <- getLineItemTotal
+  today <- liftIO $ utctDay <$> getCurrentTime
+  totalSpend <- getLineItemTotal today
   firstDay <- getDate True 
   lastDay <- getDate False
 
@@ -113,10 +123,11 @@ appMain = do
     liftIO $ putStrLn "What is your weekly budget: "
     budget <- liftIO $ getLine 
     liftIO $ putStrLn $ "Weekly budget set to: " ++ budget
+    today <- liftIO $ utctDay <$> getCurrentTime
 
     _ <- setOrAddWeeklyBudget (read budget :: Double)
 
-    getLineItemTotal
+    getLineItemTotal today
 
   budget <- runDB $ getWeeklyBudget
 
@@ -146,10 +157,11 @@ handleChangeBudget = do
 
 runText :: (MonadIO m) => SqlPersistT m ()
 runText = do 
+  today <- liftIO $ utctDay <$> getCurrentTime
   currentBudget <- getWeeklyBudget
   dailySpend <- getDailyAverageSpend
   let budget = extractBudget currentBudget
-  spent :: Double <- getLineItemTotal
+  spent :: Double <- getLineItemTotal today
   liftIO $ putStrLn $ "Your current budget is $(" ++ (show (budget - spent)) ++ "/" ++ (show budget) ++ ")" ++ 
     "\nWould you like to:\n1. Add an item\n2. Change your budget\n3. See statistics\n4. Exit"
   selection <- liftIO $ getLine
@@ -164,7 +176,7 @@ runText = do
 main :: IO ()
 main = do 
   runStderrLoggingT $
-    withSqliteConn ":memory:" $ \conn -> do 
+    withSqliteConn "lunchline.db" $ \conn -> do 
       runAppM (Env conn) $ do 
         runDB $ runMigration migrateAll
         appMain

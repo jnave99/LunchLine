@@ -1,2 +1,5 @@
 .stack-work/
 *~
+lunchline.db
+lunchline.db-shm
+lunchline.db-wal
